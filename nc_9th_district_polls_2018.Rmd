@@ -1,0 +1,218 @@
+---
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load needed dependencies
+
+library(tidyverse)
+library(devtools)
+library(gt)
+library(forcats)
+library(RColorBrewer)
+
+```
+
+
+```{r data, echo=FALSE}
+
+# Read in the data into a properly formatted dataframe
+
+orig <- read_csv(file = "ps_4_elections-poll-nc09-3.csv",
+                 col_types =  cols(
+                   .default = col_character(),
+                   turnout_scale = col_double(),
+                   turnout_score = col_double(),
+                   w_LV = col_double(),
+                   w_RV = col_double(),
+                   final_weight = col_double(),
+                   timestamp = col_datetime(format = "")))
+
+```
+
+
+```{r table, echo=FALSE, results="asis"}
+
+orig %>% 
+  
+  # Must be the race_eth variable and not one of the other race-related variables because filtering out "[DO NOT READ]" as well as responses other than "Dem", "Rep", "Und", and then grouping and counting by race_eth gives the n breakdown that matches that on the left side of the chart to recreate
+  
+  # Remove data invalid for race_eth -- not present in the chart
+  filter(!race_eth == "[DO NOT READ] Don't know/Refused") %>%
+  
+  # Default order of the data does not match the chart -- chart has a specific order that is not alphabetic order, so manually reorder the factors
+  mutate(race_eth = fct_relevel(race_eth, "White", "Black", 
+                             "Hispanic", "Asian", "Other")) %>%
+  
+  # Limit data to relevant variables for ease of manipulation
+  select(response, race_eth, final_weight) %>%
+  
+  # Sort data by the parameters of interest
+  group_by(race_eth, response) %>% 
+  
+  # Account for different weights of votes
+  summarize(total = sum(final_weight)) %>% 
+  
+  # Reformat code into the proper shape, with response as the columns, the different race_eth values as the rows, and the values the total (calculated from the final_weights). The fill must be zero to replace the NA with a zero as that value will be involved in calculating the row total, and trying to add NA to a number equals NA. 
+  
+  #Logically, zero makes sense here -- it's not that this data was missing, but that there were actually zero recorded Und Asians. 
+  spread(key=response, value=total, fill = 0) %>%
+  
+  # Calculate row totals so that percentages of the whole can be calculated
+  # After comparing the numbers with the chart, it became evident that the total being used in this step also included those who chose a 3rd party, even though the individual % is not displayed on the chart (e.g. given row totals do not add up to 100% between Rep, Und, and Dem)
+  mutate(all =  Dem + Rep + Und + `3`) %>%
+  
+  # Calculate percentages using each row total
+  mutate(Dem = Dem / all, Rep = Rep / all, Und = Und / all) %>% 
+  
+  # Deselect the row total column and the 3rd party response percentages as this data is not displayed in the final chart
+  select(-all, -`3`) %>% 
+  
+  # Remove the implicit grouping from the earlier command so that the data is ready for being piped into a gt table  
+  ungroup() %>%
+  
+  # Initialize a gt table with the proper title
+  gt() %>% 
+  
+    tab_header(
+      title = "2018 Polling Results - North Carolina’s 9th Congressional District") %>% 
+  
+  # Style certain cells to have a red background when Rep > Dem
+      tab_style(style=cells_styles(
+        bkgd_color = "crimson", 
+        text_color = "white"), 
+        locations = cells_data(columns = vars(Rep), rows = Rep > Dem)) %>%
+  
+  # Style certain cells to have a blue background when Dem > Rep
+  tab_style(style=cells_styles(
+    bkgd_color = "blue", 
+    text_color = "white"), 
+    locations = cells_data(columns = vars(Dem), rows = Dem > Rep)) %>%
+  
+  # Set order of columns and their corresponding labels
+    cols_label(
+      race_eth = "Race",
+      Dem = "DEM.",
+      Rep = "REP.",
+      Und = "UND."
+      ) %>%
+  
+  # Format displayed data as a percent rather than its current decimal form
+  fmt_percent(columns = vars(Dem, Rep, Und),
+                decimals = 0) %>% 
+  
+  # Convert the 0 to an NA so that fmt_missing can be used to find and replace NA's with an em dash, as per the given chart. 
+  
+  na_if(0) %>%
+  
+  fmt_missing(columns = vars(Und), rows = 4) %>%  
+  
+  # Add a note about the data source at the bottom, for good data practices, even though it was not in the original
+  tab_source_note(
+    source_note = "Source: New York Times Upshot / Siena College 2018 live polls") %>% 
+  
+  # Turn table into html and add it to the markdown file
+  as_raw_html() %>% as.character() %>% cat()
+
+```
+
+## 
+
+```{r violin, echo=FALSE}
+
+# Must involve the educ variable and not the educ4 variable because using glimpse or group_by and then count() reveals that educ has the category of Grade School, seen on the final chart, while educ4 does not. 
+
+orig %>% 
+  
+  # Limit data to relevant variables
+  select(educ, final_weight) %>% 
+  
+  # Remove not-plotted, invalid data
+  filter(!educ == "[DO NOT READ] Refused") %>%
+  
+  # Create violin plot. Based on how violin plots are calculated / drawn, initially, the categorical variable should always be specified for the x axis, and the numerical variable for the y-axis. 
+  # Fct_relevel allows specific re-ordering of the categories, more than simply alphabetizing them
+  
+  ggplot(aes(x = fct_relevel(educ, "Grade school", "High school", "Some college or trade school", "Bachelors' degree", "Graduate or Professional Degree"), y = final_weight)) + 
+  
+  geom_violin() + 
+  
+  # Add points to the violin plot, using jitter so that they will be distributed within each violin. Width of .15 to approximate the amount of jitter observed in the given chart
+  # Alpha value ensures that the points are somewhat translucent as seen in the given chart
+  
+  geom_jitter(alpha = 0.4, size = 1, width = .15) + 
+  
+  # For geom_violin(), x needed to be educ and y needed to be final weight -- our final chart has this flipped, so now use this function to flip the axes
+  
+  coord_flip() +
+  
+  # Add appropriate labels
+  
+  labs(title = "More Educated Matter Less in North Carolina 9th", subtitle = "Poll gives more weight to people who are less likely to participate in polls", caption = "Source: New York Times Upshot / Siena College 2018 live polls") +
+  
+  # ylab here corresponds to what was originally defined as the yaxis, which is why it is for poll weights and xlab is null - it will get flipped in the display
+  
+  ylab("Weight Given to Respondent in Calculating Poll Results") + xlab(NULL)
+
+```
+
+## 
+
+```{r visual, echo=FALSE}
+
+# For my visualization, I was interested to look at the distribution of poll responses (broken down by response) over the different timestamps. 
+
+# I noticed that the date range for the timestamps spanned 10-26 to 10-31. Even if I was to look at all the data together, I wouldn't neccessarily expect to see an even distribution of 1/6 of the polled people coming on each day - the result of various factors that make some days more convenient than others. 
+
+# I wondered what the patterns might be for each response group - e.g. did the Third Party responses tend to all come in right at the end? Did Republican responses tend to come earlier in the poll window, or later?
+
+orig %>% 
+  
+  # Limit data to relevant variables to work with
+  select(response, timestamp) %>% 
+  
+  # In order to generate meanginful groupings, subset timestamp so that only the date portion is included 
+  mutate(timestamp = substr(timestamp, 1, 10)) %>% 
+  
+  # Group by response and timestamp
+  group_by(response, timestamp) %>% 
+  summarize(total = n()) %>% 
+  
+  # Calculate what proportion of the total in a response group responded on a given day, and then convert this to a percentage
+  mutate(freq = total / sum(total), pct = round((freq*100), 0)) %>%
+  
+  # Plot the data, showing the percent voting each day, with each day broken down into the response categories for a side-by-side comparison more helpful than facet wrap
+  
+  # Reorder using fct_relevel so that the two primary parties are first
+  
+  ggplot(aes(x = timestamp, y = pct, 
+             fill = fct_relevel(response, "Rep", "Dem", "Und", "3"))) +
+  
+  # Facet the data by response to show the differences between response patterns for response types
+  
+  facet_grid(rows = vars(fct_relevel(response, "Rep", "Dem", "Und", "3"))) +
+  
+  # Create bar chart; the position_dodge function and argument ensures that bars are uniform size and that spaces are left for "missing" data - allowing us to visually understand that there were zero Third Party or Undecided poll responses on the last day
+  
+  geom_col() +
+  
+  # Change colors used to fill in the bars -- I chose Set1 because the first and second categories are red and blue, and so I could make that correspond to Rep and Dem to add a little extra implicit sign-posting
+  
+  scale_fill_brewer(palette="Set1", name="", 
+                    labels=c("Republican", "Democrat", "Undecided", "Third Party")) + 
+  
+  # Ensuring the graph is informative, and has title, subtitle, and axes labels
+  
+  labs(title = "North Carolina 9th - Poll Days Response Distribution 2018", 
+       subtitle = "The largest percent of Democrat responses was recorded on 10/27, while Republican responses 
+had a more even distribution, except on the last day", 
+       caption = "Source: New York Times Upshot / Siena College 2018 live polls", 
+       x = "Date", y = "Percent") +
+  
+  # Removes legend
+  theme(legend.position="none")
+
+  
+```
